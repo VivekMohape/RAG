@@ -1,70 +1,82 @@
-# RAG Streamlit Demo (Groq OSS 20B)
-This repository contains a small Retrieval-Augmented Generation (RAG) demo built with Streamlit.
-It uses Hugging Face sentence-transformers for embeddings and Groq OSS 20B for answer generation (if you provide a Groq API key).
+# RAG QA System 
 
-## Goals
-Build a retrieval-augmented QA service over a small doc set. Includes:
-- Chunking strategy
-- In-memory embedding store (with option to upgrade)
-- Answer generation using Groq OSS 20B (preferred) or extractive fallback
-- Evaluation set (10 Q/A) with EM/F1/Faithfulness metrics
+This repository contains a **Retrieval-Augmented Generation (RAG)** question-answering system built with **Python** and **Streamlit**.  
+It demonstrates an end-to-end RAG pipeline — including **document chunking**, **embedding-based retrieval**, and **context-grounded answer generation** — using **Hugging Face SentenceTransformers** for embeddings and **Groq OSS models** for generation.
 
-## Project structure
-- `app.py` — Streamlit front-end (chat + eval)
-- `main.py` — RAG core: chunking, embedding precompute, retrieval, extractive answer
-- `evaluation.py` — Small QA dataset + metrics (EM/F1/Faithfulness)
-- `requirements.txt`, `Dockerfile`
+You can explore the fully deployed **live app**, upload `.txt` or `.md` files, and test the retrieval pipeline interactively.
 
-## Chunking strategy
-- Documents are split into sentence-based chunks and grouped into ~150-word chunks.
-- Rationale: 150 words balances context usefulness vs retrieval granularity for small docsets. For long documents, consider 200-400 words or semantic sentence groups determined by embedding similarity.
+---
 
-## Embedding store
-- Default: in-memory embeddings cached in Streamlit process (suitable for <=~200 small docs).
-- Upgrade path: Chroma, Pinecone, Weaviate for persistent, scalable vector stores.
+## Live Resources
+- **Live Streamlit App:** [https://opensource-rag.streamlit.app/](https://opensource-rag.streamlit.app/)  
+- **Video Explanation:** [https://drive.google.com/file/d/1MDoYCCrZvP0PDsfj_x4br5E0hM32zuhA/view?usp=drivesdk](https://drive.google.com/file/d/1MDoYCCrZvP0PDsfj_x4br5E0hM32zuhA/view?usp=drivesdk)
 
-## Answer generation
-- If you supply `GROQ_API_KEY` in Streamlit sidebar, `app.py` will call Groq OSS 20B (`llama-3-oss-20b`) for generative answers using retrieved context.
-- Fallback: extractive answer using simple heuristics from retrieved chunks.
+---
 
-## Evaluation
-- `evaluation.py` includes a 10-question QA set and computes EM, F1, and a crude faithfulness heuristic (overlap-based).
+## Project Goals
+Implements the following assignment brief:
 
-## Trade-offs, cost & latency (estimates)
-> These are approximate numbers to help planning. Actual results depend on model provider pricing, hardware, and request batching.
+> “Build a minimal retrieval-augmented QA service over a small document set. Include: chunking strategy, embedding store, answer generation, and a short README with trade-offs and cost/latency numbers.”
 
-**Embedding (bge-small-en-v1.5 or all-MiniLM-L6-v2)**
-- Latency: ~50-300 ms per request locally (model download first-run cost ~30-90s).
-- Cost: If hosted via Hugging Face Inference endpoint, expect $0.0006 - $0.003 per 1K tokens (varies); local inference cost = compute/hardware cost.
+### Core Features
+- Hybrid **chunking** strategy (sentence + newline + bullet aware)
+- **In-memory embedding store** for semantic retrieval (upgrade-ready for vector DBs)
+- **Answer generation** using Groq OSS models (`openai/gpt-oss-120b`, `llama-3.3-70b`, `mixtral-8x7b`)
+- **Extractive fallback** when no API key is provided
+- Streamlit-based **interactive interface** for upload, retrieval, and querying
+- Built-in **latency metrics** and debug views for analysis
 
-**Groq OSS 20B (inference via Groq cloud)**
-- Latency: ~200-800 ms per request for a single-turn chat (depends on model, batch, and provider).
-- Cost: Groq pricing varies; OSS models are cheaper but you still pay per-token inference on their cloud. Estimate: $0.0005 - $0.005 per 1K tokens (very rough).
-- Note: Using OSS model on Groq often yields similar quality to larger hosted models at lower cost, but may have differences in instruction-following.
+---
 
-**Overall example (small demo)**
-- End-to-end latency (embedding + retrieval + generation): ~300 ms - 2s for small inputs when cached embeddings and a responsive LLM endpoint are used.
-- Monthly cost (light usage, 1k queries/month): likely <$5-$50 depending on provider and tokens per query.
+## Project Structure
+| File | Purpose |
+|------|----------|
+| `app.py` | Streamlit frontend (UI + configuration + evaluation) |
+| `main.py` | RAG core logic — chunking, embedding, retrieval, answer generation |
+| `evaluation.py` | Optional script for computing EM/F1/Faithfulness metrics |
+| `requirements.txt` / `Dockerfile` | Dependencies and deployment setup |
 
-## Run locally
-1. Create venv and install:
-   ```
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. Run:
-   ```
-   streamlit run app.py
-   ```
-3. Open `http://localhost:8501`
+---
 
-## Deploy
-- Streamlit Cloud: push to GitHub, set `GROQ_API_KEY` as secret.
-- Docker: build image via `docker build -t rag-streamlit .` and run.
+## Chunking Strategy
+- Splits documents into sentence-level units using punctuation, newlines, and bullet detection.  
+- Groups text into ~250-word chunks (adjustable from the UI).  
+- Designed for structured text such as resumes, reports, or press releases.  
+- Balances context coverage with retrieval precision for small datasets.
 
-## Notes & Next steps
-- For production, replace in-memory store with a vector DB and add authentication.
-- Add better prompt engineering and answer calibration for faithfulness (e.g., source attribution, confidence scoring).
+---
 
+## Embedding Store
+- **Default:** In-memory embeddings cached within Streamlit runtime (ideal for small datasets).  
+- **Models Supported:**
+  - `BAAI/bge-small-en-v1.5`
+  - `sentence-transformers/all-MiniLM-L6-v2`
+- **Upgrade Path:** Integrate Chroma, Pinecone, or Weaviate for persistence and scalability.  
+- Embeddings are precomputed once per document and reused for subsequent queries.
+
+---
+
+## Answer Generation
+- If `GROQ_API_KEY` is set, the app uses **Groq OSS models** (`openai/gpt-oss-120b` by default) for context-grounded generation.  
+- Answers are generated strictly based on retrieved document context.  
+- Without a Groq key, the app performs **extractive summarization** from retrieved chunks.  
+- Sidebar controls allow model selection, top-k tuning, and chunk-size configuration.
+
+---
+
+## Trade-offs, Cost & Latency (approx.)
+> Approximate figures for light usage with small text inputs.
+
+| Component | Latency | Cost (est.) | Notes |
+|------------|----------|-------------|-------|
+| **Embedding (BGE/MiniLM)** | 50–300 ms | ~$0 (local) or $0.001 / 1K tokens | Cached after first run |
+| **Groq LLM (OSS 120B)** | 200–800 ms | ~$0.0005–0.005 / 1K tokens | Dependent on query length |
+| **End-to-End** | 300 ms – 2 s | — | Includes embedding + retrieval + generation |
+
+**Trade-offs**
+- In-memory embeddings: simple, fast, and ephemeral.  
+- Groq based OpenAI OSS models: cost-effective and open-source but require API key.  
+- Chunk size: smaller improves precision; larger improves context completeness.
+
+---
 
