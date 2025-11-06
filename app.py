@@ -118,7 +118,7 @@ Answer:"""
                     from groq import Groq
                     client = Groq(api_key=GROQ_KEY)
                     r = client.chat.completions.create(
-                        model="llama-3-oss-20b",
+                        model="openai/gpt-oss-120b",
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0,
                         max_tokens=400
