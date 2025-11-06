@@ -67,5 +67,4 @@ Build a retrieval-augmented QA service over a small doc set. Includes:
 - For production, replace in-memory store with a vector DB and add authentication.
 - Add better prompt engineering and answer calibration for faithfulness (e.g., source attribution, confidence scoring).
 
-## License
-MIT
+
