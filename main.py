@@ -37,84 +37,171 @@ class RAGSystem:
         for doc in self.documents:
             chunks = self._chunk_document(doc)
             self.chunks.extend(chunks)
-        print(f"[DEBUG] Created {len(self.chunks)} chunks")
+        print(f"[DEBUG] Created {len(self.chunks)} chunks total")
+        for i, chunk in enumerate(self.chunks[:3]):
+            print(f"[DEBUG] Chunk {i+1} preview: {chunk.text[:100]}...")
 
     def _chunk_document(self, doc, max_words=None):
         if max_words is None:
             max_words = self.chunk_size
         content = doc.get("content", "")
-
-        # Enhanced sentence splitter (handles resumes, newlines, bullets)
-        sentences = re.split(r"(?<=[.!?])\s+|\n|•|- ", content)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 0]
+        
+        if not content.strip():
+            return []
+        
+        # Multi-strategy sentence splitting for robustness
+        sentences = []
+        
+        # Strategy 1: Split on sentence endings with punctuation
+        parts = re.split(r"(?<=[.!?])\s+", content)
+        
+        # Strategy 2: If very few splits, also split on newlines and bullets
+        if len(parts) <= 2 and len(content.split()) > max_words:
+            # Split on newlines, bullets, dashes, and sentence endings
+            parts = re.split(r"(?<=[.!?])\s+|\n+|(?:^|\n)\s*[•\-\*]\s+", content)
+        
+        # Clean up the parts
+        for part in parts:
+            part = part.strip()
+            if part:
+                # If a single part is still too large, force split it
+                if len(part.split()) > max_words * 2:
+                    words = part.split()
+                    for i in range(0, len(words), max_words):
+                        sub_chunk = " ".join(words[i:i+max_words])
+                        if sub_chunk.strip():
+                            sentences.append(sub_chunk)
+                else:
+                    sentences.append(part)
+        
+        # Final fallback: if still empty or just one huge block
         if not sentences:
             sentences = [content]
-
+        
+        # Now group sentences into chunks of ~max_words
         chunks = []
         current = []
         wc = 0
+        
         for s in sentences:
+            if not s.strip():
+                continue
+                
             words = len(s.split())
+            
+            # Start new chunk if adding this would exceed limit
             if wc + words > max_words and current:
                 text = " ".join(current)
-                chunks.append(DocumentChunk(doc["id"], doc.get("title", ""), text, f"{doc['id']}_chunk_{len(chunks)}"))
+                chunks.append(
+                    DocumentChunk(
+                        doc["id"],
+                        doc.get("title", ""),
+                        text,
+                        f"{doc['id']}_chunk_{len(chunks)}"
+                    )
+                )
                 current = [s]
                 wc = words
             else:
                 current.append(s)
                 wc += words
+        
+        # Don't forget the last chunk
         if current:
             text = " ".join(current)
-            chunks.append(DocumentChunk(doc["id"], doc.get("title", ""), text, f"{doc['id']}_chunk_{len(chunks)}"))
+            chunks.append(
+                DocumentChunk(
+                    doc["id"],
+                    doc.get("title", ""),
+                    text,
+                    f"{doc['id']}_chunk_{len(chunks)}"
+                )
+            )
+        
+        print(f"[DEBUG] Doc '{doc.get('title', 'untitled')}': {len(chunks)} chunks created")
         return chunks
 
     def precompute_embeddings(self, model):
         if model is None:
             return
         texts = [c.text for c in self.chunks]
+        if not texts:
+            print("[DEBUG] No texts to embed!")
+            return
         embs = model.encode(texts, batch_size=32, show_progress_bar=False, normalize_embeddings=True)
         for c, e in zip(self.chunks, embs):
             c.embedding = e
-        print(f"[DEBUG] First embedding vector length: {len(embs[0]) if len(embs) > 0 else 'None'}")
+        print(f"[DEBUG] Embedded {len(embs)} chunks, vector dim: {len(embs[0]) if len(embs) > 0 else 'None'}")
 
     def retrieve(self, query, top_k=3):
-        if isinstance(query, (list, np.ndarray)):
+        # Check if query is an embedding vector (numpy array, list, or has shape attribute)
+        is_embedding = isinstance(query, (list, tuple, np.ndarray)) or (
+            hasattr(query, 'shape') and query.shape is not None
+        )
+        
+        if is_embedding:
             q_emb = np.array(query)
             scored = []
             for c in self.chunks:
                 if c.embedding is not None:
                     sim = float(cosine_similarity([q_emb], [c.embedding])[0][0])
                     scored.append((c, sim))
+                else:
+                    # If chunks don't have embeddings, skip or score as 0
+                    scored.append((c, 0.0))
             scored.sort(key=lambda x: x[1], reverse=True)
+            print(f"[DEBUG] Semantic retrieval: top score = {scored[0][1]:.3f if scored else 'N/A'}")
             return scored[:top_k]
-
-        # fallback keyword overlap
-        q_words = set(re.sub(r"[^\w\s]", " ", query.lower()).split())
+        
+        # Fallback: keyword overlap (BM25-like)
+        q_words = set(re.sub(r"[^\w\s]", " ", str(query).lower()).split())
+        q_words = {w for w in q_words if len(w) > 2}
+        
         scored = []
         for c in self.chunks:
             inter = len(q_words & set(c.words))
-            union = len(q_words | set(c.words)) if q_words or c.words else 1
-            score = inter / union
+            union = len(q_words | set(c.words)) if (q_words or c.words) else 1
+            score = inter / union if union > 0 else 0.0
             scored.append((c, score))
+        
         scored.sort(key=lambda x: x[1], reverse=True)
+        print(f"[DEBUG] Keyword retrieval: top score = {scored[0][1]:.3f if scored else 'N/A'}")
         return scored[:top_k]
 
     def generate_answer(self, query, chunks, llm_gen_fn=None):
         if llm_gen_fn:
             context = "\n\n".join([f"[{i+1}] {c.text}" for i, (c, _) in enumerate(chunks)])
+            if not context.strip():
+                return "No relevant context found in documents."
             return llm_gen_fn(query, context)
-
-        # simple extractive fallback
+        
+        # Simple extractive fallback
         if not chunks:
             return "No relevant info found."
+        
         context = " ".join([c.text for c, _ in chunks])
-        sentences = re.findall(r"[^.!?]+[.!?]+", context)
+        
+        # Try to extract sentences
+        sentences = re.split(r"(?<=[.!?])\s+", context)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
         if not sentences:
-            return context[:400]
+            # No sentence structure, return truncated context
+            return context[:400].strip()
+        
+        # Rank sentences by keyword overlap with query
         q_words = set(re.sub(r"[^\w\s]", " ", query.lower()).split())
+        q_words = {w for w in q_words if len(w) > 2}
+        
         ranked = []
         for s in sentences:
             s_words = set(re.sub(r"[^\w\s]", " ", s.lower()).split())
-            ranked.append((s.strip(), len(q_words & s_words)))
+            s_words = {w for w in s_words if len(w) > 2}
+            overlap = len(q_words & s_words)
+            ranked.append((s.strip(), overlap))
+        
         ranked.sort(key=lambda x: x[1], reverse=True)
-        return " ".join([s for s, _ in ranked[:2]])
+        
+        # Return top 2-3 sentences
+        result = " ".join([s for s, _ in ranked[:3] if s])
+        return result if result else context[:400].strip()
