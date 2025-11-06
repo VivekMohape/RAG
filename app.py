@@ -48,13 +48,13 @@ if uploads:
     for f in uploads:
         text = f.read().decode("utf-8", errors="ignore")
         new_docs.append({
-            "id": f"name_{int(time.time())}",
+            "id": f.name + "_" + str(int(time.time())),
             "title": f.name,
             "content": text
         })
     st.session_state["uploaded_docs"] = new_docs
 
-# Use uploaded docs if available, else fallback to sample docs
+# Use uploaded docs if available
 if st.session_state["uploaded_docs"]:
     documents = st.session_state["uploaded_docs"]
     st.success(f"✅ Using {len(documents)} uploaded document(s).")
@@ -62,11 +62,10 @@ else:
     documents = SAMPLE_DOCS
     st.info("📄 Using default sample documents (Product A Spec, etc.).")
 
-# Cached Hugging Face model loader (Streamlit Cloud–safe)
+# Cached Hugging Face model loader
 @st.cache_resource
 def load_hf_model(name):
     from sentence_transformers import SentenceTransformer
-    # Auto-fix HF path for reliability
     if name.lower() == "bge-small-en-v1.5":
         name = "BAAI/bge-small-en-v1.5"
     elif name.lower() == "all-minilm-l6-v2":
@@ -76,15 +75,14 @@ def load_hf_model(name):
 
 hf = load_hf_model(hf_model) if use_embeddings else None
 
-# Initialize RAG safely (avoid unhashable cache issue)
+# Safe re-init of RAG system
 def init_rag(docs, hf_model):
     rag = RAGSystem(docs, hf_model=hf_model)
     if hf_model:
         rag.precompute_embeddings(hf_model)
     return rag
 
-# Keep RAG persistent in session
-if "rag" not in st.session_state or st.session_state.get("rag_docs") != documents:
+if "rag" not in st.session_state or len(st.session_state.get("rag_docs", [])) != len(documents):
     with st.spinner("Initializing RAG system..."):
         st.session_state["rag"] = init_rag(documents, hf)
         st.session_state["rag_docs"] = documents
@@ -94,6 +92,12 @@ st.sidebar.success(f"{len(rag.chunks)} chunks ready")
 
 # Tabs: Chat / Evaluation / Docs / About
 tabs = st.tabs(["Chat", "Evaluation", "Docs", "About"])
+
+# ---------------- Debug View ----------------
+with st.expander("🧩 Debug: View created chunks"):
+    for i, c in enumerate(rag.chunks[:10], 1):
+        st.markdown(f"**Chunk {i}** ({len(c.text.split())} words):")
+        st.text(c.text[:400])
 
 # ---------------- Chat Tab ----------------
 with tabs[0]:
@@ -108,29 +112,27 @@ with tabs[0]:
 
         chunks = rag.retrieve(q_emb if q_emb is not None else q, top_k=top_k)
 
-        # If no chunks retrieved, show message
         if not chunks:
-            st.warning("No relevant context found in the uploaded documents.")
+            st.warning("No relevant context found.")
         else:
             with st.expander("🔍 Retrieved Chunks (context)"):
                 for i, (c, s) in enumerate(chunks, 1):
                     st.markdown(f"**[{i}] {c.doc_title}** (score: {s:.3f})")
                     st.write(c.text[:600])
 
-        # LLM generator
         def llm_gen(q, context):
             if not context.strip():
-                return "No relevant context found. Please rephrase your question."
+                return "No relevant context found."
             prompt = f"""
-You are a helpful assistant that answers ONLY using the information in the context below.
-If the answer cannot be found, reply: "I could not find this information in the provided documents."
+You are a helpful assistant that summarizes relevant details about the topic using the information in the context below. 
+If needed, use your general knowledge to fill small gaps, but prioritize facts from the document.
 
 Context:
 {context}
 
 Question: {q}
 
-Answer (based ONLY on the context above):
+Answer:
 """
             try:
                 if GROQ_KEY:
@@ -177,9 +179,9 @@ with tabs[2]:
 with tabs[3]:
     st.header("About & Tips")
     st.markdown("""
-**Chunking:** Documents are split into ~150-word chunks for efficient semantic retrieval.
+**Chunking:** Documents are split into ~250-word chunks for efficient semantic retrieval.
 
 **Embeddings:** Cached locally in memory (suitable for <500 docs). Use Chroma or Pinecone for larger datasets.
 
-**Answer generation:** Uses Groq OSS 120B if a Groq API key is provided; otherwise falls back to extractive answer generation.
+**Answer generation:** Uses Groq OSS 120B if `GROQ_API_KEY` is provided; otherwise falls back to extractive answers.
 """)
