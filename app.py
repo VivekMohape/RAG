@@ -6,10 +6,10 @@ from evaluation import run_evaluation, load_eval_dataset
 st.set_page_config(page_title="RAG QA (Groq OSS 20B)", layout="wide")
 st.title("Retrieval-Augmented QA — Groq OSS 20B (demo)")
 
-# Sidebar config
+# Sidebar configuration
 st.sidebar.header("Configuration")
 GROQ_KEY = st.sidebar.text_input(
-    "Groq API Key (or leave empty for local demo)",
+    "Groq API Key (optional for generation)",
     type="password",
     value=os.getenv("GROQ_API_KEY", "")
 )
@@ -20,7 +20,7 @@ top_k = st.sidebar.slider("Top retrieved chunks", 1, 5, 3)
 # File uploads
 uploads = st.file_uploader("Upload .txt/.md docs (multiple)", accept_multiple_files=True, type=["txt", "md"])
 
-# Load default small docset if no uploads
+# Default fallback documents
 SAMPLE_DOCS = [
     {
         "id": "doc1",
@@ -39,6 +39,7 @@ SAMPLE_DOCS = [
     }
 ]
 
+# Load uploaded or sample docs
 documents = []
 if uploads:
     for f in uploads:
@@ -53,26 +54,24 @@ if not documents:
     documents = SAMPLE_DOCS
     st.info("Using sample document set (upload files to override).")
 
-
-# ✅ Cached model loader (auto-fixes BGE path for Streamlit Cloud)
+# ✅ Cached Hugging Face model loader (safe for Streamlit Cloud)
 @st.cache_resource
 def load_hf_model(name):
     from sentence_transformers import SentenceTransformer
-
-    # Automatically map to the correct HF repo ID for reliability
+    # Auto-fix model paths for cloud
     if name.lower() == "bge-small-en-v1.5":
         name = "BAAI/bge-small-en-v1.5"
     elif name.lower() == "all-minilm-l6-v2":
         name = "sentence-transformers/all-MiniLM-L6-v2"
 
-    st.info(f"Loading embedding model: {name} ... (first time may take up to 1 min)")
+    st.info(f"Loading embedding model: {name} ... (first time may take ~1 min)")
     return SentenceTransformer(name)
 
 
 hf = load_hf_model(hf_model) if use_embeddings else None
 
 
-@st.cache_resource
+# ✅ Initialize RAG safely (avoid unhashable cache issue)
 def init_rag(docs, hf_model):
     rag = RAGSystem(docs, hf_model=hf_model)
     if hf_model:
@@ -80,12 +79,18 @@ def init_rag(docs, hf_model):
     return rag
 
 
-rag = init_rag(documents, hf)
-st.sidebar.success(f"{len(rag.chunks)} chunks")
+if "rag" not in st.session_state:
+    with st.spinner("Initializing RAG system..."):
+        st.session_state["rag"] = init_rag(documents, hf)
 
+rag = st.session_state["rag"]
+st.sidebar.success(f"{len(rag.chunks)} chunks loaded")
+
+
+# Tabs: Chat / Evaluation / Docs / About
 tabs = st.tabs(["Chat", "Evaluation", "Docs", "About"])
 
-# Chat Tab
+# ---------------- Chat Tab ----------------
 with tabs[0]:
     st.header("Ask a question")
     q = st.text_input("Question")
@@ -99,8 +104,15 @@ with tabs[0]:
 
         chunks = rag.retrieve(q_emb if q_emb is not None else q, top_k=top_k)
 
+        # Define LLM generator function
         def llm_gen(q, context):
-            prompt = f"""Use the context to answer the question concisely.\n\nContext:\n{context}\n\nQuestion: {q}\nAnswer:"""
+            prompt = f"""Use the context to answer the question concisely.
+
+Context:
+{context}
+
+Question: {q}
+Answer:"""
             try:
                 if GROQ_KEY:
                     from groq import Groq
@@ -114,6 +126,8 @@ with tabs[0]:
                     return r.choices[0].message.content
             except Exception as e:
                 st.warning(f"Groq call failed: {e}")
+
+            # fallback extractive answer
             return rag.generate_answer(q, chunks, llm_gen_fn=None)
 
         answer = rag.generate_answer(q, chunks, llm_gen_fn=llm_gen)
@@ -127,7 +141,7 @@ with tabs[0]:
                 st.markdown(f"**[{i}] {c.doc_title}** (score: {score:.3f})")
                 st.write(c.text)
 
-# Evaluation Tab
+# ---------------- Evaluation Tab ----------------
 with tabs[1]:
     st.header("Run evaluation on small QA set")
     if st.button("Run eval"):
@@ -140,20 +154,20 @@ with tabs[1]:
             file_name="eval_results.json"
         )
 
-# Documents Tab
+# ---------------- Docs Tab ----------------
 with tabs[2]:
     st.header("Documents")
     for d in documents:
         with st.expander(d['title']):
             st.write(d['content'][:4000])
 
-# About Tab
+# ---------------- About Tab ----------------
 with tabs[3]:
     st.header("About & Tips")
     st.markdown("""
-    **Chunking**: Documents are chunked into ~150-word semantic units for a balance of context and recall.
+    **Chunking**: Documents are split into ~150-word semantic chunks for balance between recall and context clarity.
 
-    **Embedding store**: Cached in memory (fast for small datasets). Use Chroma or Pinecone for larger projects.
+    **Embeddings**: Cached in memory for speed (suitable for < 500 docs). Use Chroma or Pinecone for large datasets.
 
-    **Answer generation**: Groq OSS 20B for generative answers if `GROQ_API_KEY` is set, else fallback to extractive answers.
+    **Answer generation**: Uses Groq OSS 20B if API key is set; otherwise uses extractive fallback.
     """)
