@@ -1,0 +1,52 @@
+[
+  {
+    "id": "q1",
+    "question": "What is the starting price of Product A?",
+    "answer": "$199"
+  },
+  {
+    "id": "q2",
+    "question": "How long is the warranty for Product A?",
+    "answer": "1 year"
+  },
+  {
+    "id": "q3",
+    "question": "Where to get firmware updates?",
+    "answer": "example.com/firmware"
+  },
+  {
+    "id": "q4",
+    "question": "What should you do first when installing Product A?",
+    "answer": "Unbox the product"
+  },
+  {
+    "id": "q5",
+    "question": "How to reset network issues?",
+    "answer": "Hold the button for 10s to reset network"
+  },
+  {
+    "id": "q6",
+    "question": "Name one common issue with Product A.",
+    "answer": "network"
+  },
+  {
+    "id": "q7",
+    "question": "Which feature categories does Product A support?",
+    "answer": "features X, Y, Z"
+  },
+  {
+    "id": "q8",
+    "question": "Is Product A compact?",
+    "answer": "Yes"
+  },
+  {
+    "id": "q9",
+    "question": "What is recommended for firmware?",
+    "answer": "visit example.com/firmware"
+  },
+  {
+    "id": "q10",
+    "question": "What are core collaboration hours (sample)?",
+    "answer": "10 AM - 3 PM IST"
+  }
+]
