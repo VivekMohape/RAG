@@ -34,7 +34,7 @@ Implements the following assignment brief:
 | `app.py` | Streamlit frontend (UI + configuration + evaluation) |
 | `main.py` | RAG core logic — chunking, embedding, retrieval, answer generation |
 | `evaluation.py` | Optional script for computing EM/F1/Faithfulness metrics |
-| `requirements.txt` / `Dockerfile` | Dependencies and deployment setup |
+| `requirements.txt` | Dependencies and deployment setup |
 
 ---
 
