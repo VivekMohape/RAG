@@ -53,11 +53,21 @@ if not documents:
     documents = SAMPLE_DOCS
     st.info("Using sample document set (upload files to override).")
 
-# Cached model loader
+
+# ✅ Cached model loader (auto-fixes BGE path for Streamlit Cloud)
 @st.cache_resource
 def load_hf_model(name):
     from sentence_transformers import SentenceTransformer
+
+    # Automatically map to the correct HF repo ID for reliability
+    if name.lower() == "bge-small-en-v1.5":
+        name = "BAAI/bge-small-en-v1.5"
+    elif name.lower() == "all-minilm-l6-v2":
+        name = "sentence-transformers/all-MiniLM-L6-v2"
+
+    st.info(f"Loading embedding model: {name} ... (first time may take up to 1 min)")
     return SentenceTransformer(name)
+
 
 hf = load_hf_model(hf_model) if use_embeddings else None
 
@@ -91,7 +101,6 @@ with tabs[0]:
 
         def llm_gen(q, context):
             prompt = f"""Use the context to answer the question concisely.\n\nContext:\n{context}\n\nQuestion: {q}\nAnswer:"""
-            # Prefer Groq OSS 20B if key provided
             try:
                 if GROQ_KEY:
                     from groq import Groq
@@ -105,7 +114,6 @@ with tabs[0]:
                     return r.choices[0].message.content
             except Exception as e:
                 st.warning(f"Groq call failed: {e}")
-            # fallback: simple extractive answer
             return rag.generate_answer(q, chunks, llm_gen_fn=None)
 
         answer = rag.generate_answer(q, chunks, llm_gen_fn=llm_gen)
@@ -143,12 +151,9 @@ with tabs[2]:
 with tabs[3]:
     st.header("About & Tips")
     st.markdown("""
-    **Chunking**: We chunk documents into ~150-word semantic chunks (sentences joined) 
-    to balance context size vs retrieval recall.
+    **Chunking**: Documents are chunked into ~150-word semantic units for a balance of context and recall.
 
-    **Embedding store**: In-memory cached embeddings (suitable for small docsets). 
-    For larger corpora, switch to Chroma, Pinecone, or Weaviate.
+    **Embedding store**: Cached in memory (fast for small datasets). Use Chroma or Pinecone for larger projects.
 
-    **Answer generation**: Uses Groq OSS 20B when API key provided; otherwise falls back 
-    to extractive answers from retrieved chunks.
+    **Answer generation**: Groq OSS 20B for generative answers if `GROQ_API_KEY` is set, else fallback to extractive answers.
     """)
