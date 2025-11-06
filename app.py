@@ -1,5 +1,5 @@
 import streamlit as st
-import os, time, json
+import os, time, json, traceback
 from main import RAGSystem
 from evaluation import run_evaluation, load_eval_dataset
 
@@ -17,7 +17,7 @@ GROQ_KEY = st.sidebar.text_input(
 # Model selection for Groq
 groq_model = st.sidebar.selectbox(
     "Groq Model",
-    ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"],
+    ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
     help="Select which Groq model to use for answer generation"
 )
 
@@ -28,8 +28,8 @@ chunk_size = st.sidebar.slider("Chunk size (words)", 100, 500, 250)
 
 # File uploader
 uploads = st.file_uploader(
-    "Upload .txt/.md docs (multiple)", 
-    accept_multiple_files=True, 
+    "Upload .txt/.md docs (multiple)",
+    accept_multiple_files=True,
     type=["txt", "md"],
     help="Upload your documents to query against"
 )
@@ -53,7 +53,7 @@ SAMPLE_DOCS = [
     }
 ]
 
-# --- Document handling with better persistence ---
+# --- Persistent document handling ---
 if "uploaded_docs" not in st.session_state:
     st.session_state["uploaded_docs"] = []
     st.session_state["doc_hash"] = ""
@@ -63,28 +63,27 @@ if uploads:
     doc_names = []
     for f in uploads:
         text = f.read().decode("utf-8", errors="ignore")
+        if len(text.strip()) == 0:
+            st.warning(f"⚠️ File {f.name} appears empty or unreadable after decoding.")
         new_docs.append({
             "id": f.name.replace(" ", "_") + "_" + str(int(time.time())),
             "title": f.name,
             "content": text
         })
         doc_names.append(f.name)
-    
+
     # Check if docs changed
     new_hash = "_".join(sorted(doc_names))
     if new_hash != st.session_state["doc_hash"]:
         st.session_state["uploaded_docs"] = new_docs
         st.session_state["doc_hash"] = new_hash
         # Force RAG reinit
-        if "rag" in st.session_state:
-            del st.session_state["rag"]
+        st.session_state.pop("rag", None)
 
 # Use uploaded docs if available
 if st.session_state["uploaded_docs"]:
     documents = st.session_state["uploaded_docs"]
     st.success(f"✅ Using {len(documents)} uploaded document(s)")
-    
-    # Show document preview
     with st.expander("📄 Document preview"):
         for doc in documents:
             word_count = len(doc['content'].split())
@@ -109,21 +108,27 @@ hf = load_hf_model(hf_model) if use_embeddings else None
 
 # Initialize RAG system
 def init_rag(docs, hf_model, chunk_sz):
-    if not docs:
-        st.error("No documents to process!")
+    try:
+        if not docs:
+            st.error("No documents to process!")
+            return None
+        rag = RAGSystem(docs, hf_model=hf_model, chunk_size_words=chunk_sz)
+        if not rag.chunks:
+            st.error("❌ Failed to create chunks from documents. Check document content.")
+            return None
+        if hf_model:
+            with st.spinner("Computing embeddings..."):
+                rag.precompute_embeddings(hf_model)
+        return rag
+    except Exception:
+        st.error("❌ RAG initialization failed.")
+        st.code(traceback.format_exc())
         return None
-    rag = RAGSystem(docs, hf_model=hf_model, chunk_size_words=chunk_sz)
-    if not rag.chunks:
-        st.error("❌ Failed to create chunks from documents. Check document content.")
-        return None
-    if hf_model:
-        with st.spinner("Computing embeddings..."):
-            rag.precompute_embeddings(hf_model)
-    return rag
 
-# Use session state to avoid reinitializing unnecessarily
+# Build session key & force rebuild if needed
 rag_key = f"rag_{len(documents)}_{chunk_size}_{use_embeddings}"
 if "rag" not in st.session_state or st.session_state.get("rag_key") != rag_key:
+    st.session_state.pop("rag", None)
     with st.spinner("Initializing RAG system..."):
         st.session_state["rag"] = init_rag(documents, hf, chunk_size)
         st.session_state["rag_key"] = rag_key
@@ -133,6 +138,7 @@ rag = st.session_state["rag"]
 # Safety check
 if rag is None or not rag.chunks:
     st.error("❌ RAG system initialization failed. Please check your documents.")
+    st.code(traceback.format_exc())
     st.stop()
 
 st.sidebar.success(f"✅ {len(rag.chunks)} chunks indexed")
@@ -140,7 +146,7 @@ st.sidebar.success(f"✅ {len(rag.chunks)} chunks indexed")
 # Tabs: Chat / Evaluation / Docs / About
 tabs = st.tabs(["💬 Chat", "📊 Evaluation", "📚 Documents", "ℹ️ About"])
 
-# ---------------- Debug View ----------------
+# ---------------- Debug Info ----------------
 with st.sidebar.expander("🔍 Debug Info"):
     st.write(f"**Total chunks:** {len(rag.chunks)}")
     if rag.chunks:
@@ -155,15 +161,10 @@ with st.sidebar.expander("🔍 Debug Info"):
 with tabs[0]:
     st.header("Ask a question")
     q = st.text_input("Question", placeholder="e.g., What is the price of Product A?")
-
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        ask_btn = st.button("🔍 Get Answer", type="primary")
-    
-    if ask_btn and q:
+    if st.button("🔍 Get Answer", type="primary") and q:
         t0 = time.time()
-        
-        # Get query embedding if using semantic search
+
+        # Get query embedding if semantic retrieval
         q_emb = None
         if use_embeddings and hf:
             with st.spinner("Encoding query..."):
@@ -174,13 +175,11 @@ with tabs[0]:
             chunks = rag.retrieve(q_emb if q_emb is not None else q, top_k=top_k)
 
         if not chunks:
-            st.error("❌ No chunks were created from your documents. Please check your uploaded files.")
-            st.info("💡 Tip: Make sure your text files contain actual text content with proper formatting.")
+            st.error("❌ No chunks retrieved. Please verify your documents.")
             st.stop()
-            
+
         if all(score < 0.01 for _, score in chunks):
             st.warning("⚠️ No relevant context found for your question.")
-            st.info("Try rephrasing your question or upload different documents.")
             st.stop()
 
         # Show retrieved chunks
@@ -190,25 +189,26 @@ with tabs[0]:
                 st.text(c.text[:600])
                 st.divider()
 
-        # Answer generation function
+        # LLM generator function
         def llm_gen(q, context):
             if not context.strip():
                 return "No relevant context found."
-            
-            prompt = f"""You are a helpful assistant. Answer the question based on the context provided. Be concise and accurate.
+
+            prompt = f"""You are a helpful assistant. Answer the question based on the context below. 
+If the answer cannot be found, reply: "I could not find this information in the provided documents."
 
 Context:
 {context}
 
 Question: {q}
 
-Answer (be specific and concise):"""
-            
+Answer:"""
+
             try:
                 if GROQ_KEY:
                     from groq import Groq
                     client = Groq(api_key=GROQ_KEY)
-                    with st.spinner(f"Generating answer with {groq_model}..."):
+                    with st.spinner(f"Generating answer using {groq_model}..."):
                         r = client.chat.completions.create(
                             model=groq_model,
                             messages=[{"role": "user", "content": prompt}],
@@ -219,54 +219,29 @@ Answer (be specific and concise):"""
             except Exception as e:
                 st.error(f"❌ Groq API error: {e}")
                 st.info("Falling back to extractive answer...")
-            
-            # Fallback to extractive
+
+            # Fallback extractive
             return rag.generate_answer(q, chunks, llm_gen_fn=None)
 
         # Generate answer
         answer = rag.generate_answer(q, chunks, llm_gen_fn=llm_gen if GROQ_KEY else None)
         latency = (time.time() - t0) * 1000
-        
-        # Display results
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            st.metric("⏱️ Latency", f"{latency:.0f} ms")
-        
+
+        st.metric("⏱️ Latency", f"{latency:.0f} ms")
         st.markdown("### 💡 Answer")
         st.markdown(f"> {answer}")
-        
+
         if not GROQ_KEY:
             st.info("💡 Add a Groq API key in the sidebar for better generative answers!")
 
 # ---------------- Evaluation Tab ----------------
 with tabs[1]:
     st.header("📊 Evaluation on QA Dataset")
-    st.write("Test the RAG system on a predefined set of questions.")
-    
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        eval_btn = st.button("▶️ Run Evaluation", type="primary")
-    
-    if eval_btn:
+    if st.button("▶️ Run Evaluation", type="primary"):
         eval_set = load_eval_dataset()
         with st.spinner(f"Evaluating on {len(eval_set)} questions..."):
             results = run_evaluation(rag, eval_set, top_k=top_k)
-        
-        # Show aggregate metrics
-        st.subheader("Aggregate Metrics")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Exact Match (EM)", f"{results['aggregate']['EM']:.2%}")
-        with col2:
-            st.metric("F1 Score", f"{results['aggregate']['F1']:.2%}")
-        with col3:
-            st.metric("Faithfulness", f"{results['aggregate']['Faith']:.2%}")
-        
-        # Show per-example results
-        with st.expander("📋 Per-Example Results"):
-            st.json(results)
-        
-        # Download button
+        st.json(results)
         st.download_button(
             "⬇️ Download Results (JSON)",
             data=json.dumps(results, indent=2),
@@ -288,42 +263,9 @@ with tabs[3]:
     st.header("ℹ️ About This System")
     st.markdown("""
 ### How It Works
-
-**1. Document Chunking**
-- Documents are split into chunks of ~{} words
-- Uses sentence boundaries when possible
-- Falls back to forced splits for unstructured text
-
-**2. Semantic Retrieval** 
-- Embedding models: BGE-small or MiniLM
-- Cosine similarity for semantic search
-- Fallback to keyword matching if embeddings disabled
-
-**3. Answer Generation**
-- **With Groq API**: Uses LLM (Llama 3.3 70B or others) for natural answers
-- **Without API**: Extractive answers from retrieved chunks
-
-### Tips for Best Results
-
-✅ **Upload well-formatted documents** with clear sentences  
-✅ **Use embeddings** for better semantic understanding  
-✅ **Adjust chunk size** based on your document structure  
-✅ **Add Groq API key** for high-quality generative answers  
-
-### Limitations
-
-- In-memory storage (suitable for <500 documents)
-- Simple extractive fallback without API key
-- No persistent storage across sessions
-
-### Tech Stack
-
-- **Frontend**: Streamlit
-- **Embeddings**: Sentence Transformers (HuggingFace)
-- **LLM**: Groq Cloud (Llama 3.3 70B)
-- **Retrieval**: Cosine similarity / BM25-like
-
+1. Documents are split into ~{}-word chunks (sentence and newline aware)
+2. Embeddings computed using Hugging Face (BGE or MiniLM)
+3. Cosine similarity used for semantic retrieval
+4. Answers generated with Groq model (if key provided) or extractive fallback
 """.format(chunk_size))
-    
-    st.divider()
-    st.caption("Built with ❤️ using Streamlit, HuggingFace, and Groq")
+    st.caption("Built with ❤️ using Streamlit, HuggingFace, and Groq.")
