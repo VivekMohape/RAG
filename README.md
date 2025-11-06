@@ -1,7 +1,7 @@
 # RAG QA System 
 
 This repository contains a **Retrieval-Augmented Generation (RAG)** question-answering system built with **Python** and **Streamlit**.  
-It demonstrates an end-to-end RAG pipeline — including **document chunking**, **embedding-based retrieval**, and **context-grounded answer generation** — using **Hugging Face SentenceTransformers** for embeddings and **Groq OSS models** for generation.
+It demonstrates an end-to-end RAG pipeline including **document chunking**, **embedding-based retrieval**, and **context-grounded answer generation**  using **Hugging Face SentenceTransformers** for embeddings and **Groq OSS models** for generation.
 
 You can explore the fully deployed **live app**, upload `.txt` or `.md` files, and test the retrieval pipeline interactively.
 
