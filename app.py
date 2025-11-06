@@ -109,7 +109,13 @@ hf = load_hf_model(hf_model) if use_embeddings else None
 
 # Initialize RAG system
 def init_rag(docs, hf_model, chunk_sz):
+    if not docs:
+        st.error("No documents to process!")
+        return None
     rag = RAGSystem(docs, hf_model=hf_model, chunk_size_words=chunk_sz)
+    if not rag.chunks:
+        st.error("❌ Failed to create chunks from documents. Check document content.")
+        return None
     if hf_model:
         with st.spinner("Computing embeddings..."):
             rag.precompute_embeddings(hf_model)
@@ -123,6 +129,12 @@ if "rag" not in st.session_state or st.session_state.get("rag_key") != rag_key:
         st.session_state["rag_key"] = rag_key
 
 rag = st.session_state["rag"]
+
+# Safety check
+if rag is None or not rag.chunks:
+    st.error("❌ RAG system initialization failed. Please check your documents.")
+    st.stop()
+
 st.sidebar.success(f"✅ {len(rag.chunks)} chunks indexed")
 
 # Tabs: Chat / Evaluation / Docs / About
@@ -131,11 +143,13 @@ tabs = st.tabs(["💬 Chat", "📊 Evaluation", "📚 Documents", "ℹ️ About"
 # ---------------- Debug View ----------------
 with st.sidebar.expander("🔍 Debug Info"):
     st.write(f"**Total chunks:** {len(rag.chunks)}")
-    st.write(f"**Embeddings computed:** {rag.chunks[0].embedding is not None if rag.chunks else False}")
-    st.write(f"**Chunk size setting:** {chunk_size} words")
     if rag.chunks:
+        st.write(f"**Embeddings computed:** {rag.chunks[0].embedding is not None}")
+        st.write(f"**Chunk size setting:** {chunk_size} words")
         avg_chunk_size = sum(len(c.text.split()) for c in rag.chunks) / len(rag.chunks)
         st.write(f"**Avg chunk size:** {avg_chunk_size:.0f} words")
+    else:
+        st.warning("No chunks created!")
 
 # ---------------- Chat Tab ----------------
 with tabs[0]:
@@ -159,8 +173,14 @@ with tabs[0]:
         with st.spinner("Retrieving relevant chunks..."):
             chunks = rag.retrieve(q_emb if q_emb is not None else q, top_k=top_k)
 
-        if not chunks or all(score < 0.01 for _, score in chunks):
+        if not chunks:
+            st.error("❌ No chunks were created from your documents. Please check your uploaded files.")
+            st.info("💡 Tip: Make sure your text files contain actual text content with proper formatting.")
+            st.stop()
+            
+        if all(score < 0.01 for _, score in chunks):
             st.warning("⚠️ No relevant context found for your question.")
+            st.info("Try rephrasing your question or upload different documents.")
             st.stop()
 
         # Show retrieved chunks
